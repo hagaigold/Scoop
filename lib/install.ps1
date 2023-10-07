@@ -981,7 +981,7 @@ function env_add_path($manifest, $dir, $global, $arch) {
             if (!(is_in_dir $dir $path_dir)) {
                 abort "Error in manifest: env_add_path '$_' is outside the app directory."
             }
-            add_first_in_path $path_dir $global
+            ensure_in_path $path_dir $global
         }
     }
 }
@@ -991,7 +991,7 @@ function env_rm_path($manifest, $dir, $global, $arch) {
     $env_add_path | Where-Object { $_ } | ForEach-Object {
         $path_dir = Join-Path $dir $_
 
-        remove_from_path $path_dir $global
+        remove_from_scoop_path $path_dir $global
     }
 }
 

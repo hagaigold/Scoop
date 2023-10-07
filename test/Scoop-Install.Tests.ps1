@@ -51,23 +51,35 @@ Describe 'env add and remove path' -Tag 'Scoop', 'Windows' {
         }
         $testdir = Join-Path $PSScriptRoot 'path-test-directory'
         $global = $false
+        $scoop_path_env = Get-ScoopPathEnv $global
 
         # store the original path to prevent leakage of tests
         $origPath = $env:PATH
     }
 
-    It 'should concat the correct path' {
-        Mock add_first_in_path {}
-        Mock remove_from_path {}
+    It 'should concat the correct env variable and path ($Value)' {
+        Mock Add-FirstInPathToEnv {}
+        Mock Remove-FromPathInEnv {}
 
         # adding
         env_add_path $manifest $testdir $global
-        Assert-MockCalled add_first_in_path -Times 1 -ParameterFilter { $dir -like "$testdir\foo" }
-        Assert-MockCalled add_first_in_path -Times 1 -ParameterFilter { $dir -like "$testdir\bar" }
+        Assert-MockCalled Add-FirstInPathToEnv -Times 2 `
+                            -ParameterFilter { $Variable -like "PATH" -and $Value -like "%$scoop_path_env%" }
+        Assert-MockCalled Add-FirstInPathToEnv -Times 1 `
+                            -ParameterFilter {  $Variable -like $scoop_path_env -and $Value -like "$testdir\foo" }
+        Assert-MockCalled Add-FirstInPathToEnv -Times 1 `
+                            -ParameterFilter {  $Variable -like $scoop_path_env -and $Value -like "$testdir\bar" }
+
+        # removing
+        remove_scoop_paths $null $global
+        Assert-MockCalled Remove-FromPathInEnv -Times 1 `
+                            -ParameterFilter { $Variable -like "PATH" -and $Value -like "%$scoop_path_env%" }
 
         env_rm_path $manifest $testdir $global
-        Assert-MockCalled remove_from_path -Times 1 -ParameterFilter { $dir -like "$testdir\foo" }
-        Assert-MockCalled remove_from_path -Times 1 -ParameterFilter { $dir -like "$testdir\bar" }
+        Assert-MockCalled Remove-FromPathInEnv -Times 1 `
+                            -ParameterFilter {  $Variable -like $scoop_path_env -and $Value -like "$testdir\foo" }
+        Assert-MockCalled Remove-FromPathInEnv -Times 1 `
+                            -ParameterFilter {  $Variable -like $scoop_path_env -and $Value -like "$testdir\bar" }
     }
 }
 

@@ -98,7 +98,7 @@ if ($purge) {
     if ($global) { keep_onlypersist $globaldir }
 }
 
-remove_from_path (shimdir $false)
-if ($global) { remove_from_path (shimdir $true) }
+remove_scoop_paths (shimdir $false)
+if ($global) { remove_scoop_paths (shimdir $true) $true }
 
 success 'Scoop has been uninstalled.'

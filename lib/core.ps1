@@ -738,31 +738,59 @@ public static extern IntPtr SendMessageTimeout(
     ) | Out-Null
 }
 
+# stub for old get/set env API (try don't use it anymore)
 function env($name, $global, $val = '__get') {
-    $RegisterKey = if ($global) {
+    if ($val -eq '__get') {
+        Get-Env -Name $name -Global:$global
+    } else {
+        Write-Env -Name $name -Value $val -Global:$global
+    }
+}
+
+function Get-Env {
+    param(
+        [string] $Name,
+        [switch] $Global
+    )
+
+    $RegisterKey = if ($Global) {
         Get-Item -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
     } else {
         Get-Item -Path 'HKCU:'
     }
-    $EnvRegisterKey = $RegisterKey.OpenSubKey('Environment', $val -ne '__get')
 
-    if ($val -eq '__get') {
-        $RegistryValueOption = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
-        $EnvRegisterKey.GetValue($name, $null, $RegistryValueOption)
-    } elseif ($val -eq $null) {
-        try { $EnvRegisterKey.DeleteValue($name) } catch { }
-        Publish-Env
+    $EnvRegisterKey = $RegisterKey.OpenSubKey('Environment')
+    $RegistryValueOption = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+    $EnvRegisterKey.GetValue($Name, $null, $RegistryValueOption)
+}
+
+function Write-Env {
+    param(
+        [string] $Name,
+        [string] $Value,
+        [switch] $Global
+    )
+
+    $RegisterKey = if ($Global) {
+        Get-Item -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
     } else {
-        $RegistryValueKind = if ($val.Contains('%')) {
+        Get-Item -Path 'HKCU:'
+    }
+
+    $EnvRegisterKey = $RegisterKey.OpenSubKey('Environment', $true)
+    if ($Value -eq $null) {
+        try { $EnvRegisterKey.DeleteValue($Name) } catch { }
+    } else {
+        $RegistryValueKind = if ($Value.Contains('%')) {
             [Microsoft.Win32.RegistryValueKind]::ExpandString
-        } elseif ($EnvRegisterKey.GetValue($name)) {
-            $EnvRegisterKey.GetValueKind($name)
+        } elseif ($EnvRegisterKey.GetValue($Name)) {
+            $EnvRegisterKey.GetValueKind($Name)
         } else {
             [Microsoft.Win32.RegistryValueKind]::String
         }
-        $EnvRegisterKey.SetValue($name, $val, $RegistryValueKind)
-        Publish-Env
+        $EnvRegisterKey.SetValue($Name, $Value, $RegistryValueKind)
     }
+    Publish-Env
 }
 
 function isFileLocked([string]$path) {
@@ -1010,22 +1038,16 @@ function get_shim_path() {
 }
 
 function search_in_path($target) {
-    $path = (env 'PATH' $false) + ";" + (env 'PATH' $true)
+    #
+    # TODO: don't know if we really need to search **all** of the PATH ???
+    #
+    # $path = (env 'PATH' $false) + ";" + (env 'PATH' $true)
+    $path = (Get-Env $SCOOP_PATH_ENV) + ";" + (Get-Env $SCOOP_PATH_GLOBAL_ENV -Global)
+
     foreach($dir in $path.split(';')) {
         if(test-path "$dir\$target" -pathType leaf) {
             return "$dir\$target"
         }
-    }
-}
-
-function ensure_in_path($dir, $global) {
-    $path = env 'PATH' $global
-    $dir = fullpath $dir
-    if($path -notmatch [regex]::escape($dir)) {
-        write-output "Adding $(friendly_path $dir) to $(if($global){'global'}else{'your'}) path."
-
-        env 'PATH' $global "$dir;$path" # for future sessions...
-        $env:PATH = "$dir;$env:PATH" # for this session
     }
 }
 
@@ -1106,34 +1128,149 @@ function Confirm-InstallationStatus {
 function strip_path($orig_path, $dir) {
     if($null -eq $orig_path) { $orig_path = '' }
     $stripped = [string]::join(';', @( $orig_path.split(';') | Where-Object { $_ -and $_ -ne $dir } ))
-    return ($stripped -ne $orig_path), $stripped
+    return ($stripped -ne $orig_path.TrimEnd(";")), $stripped
 }
 
-function add_first_in_path($dir, $global) {
-    $dir = fullpath $dir
 
-    # future sessions
-    $null, $currpath = strip_path (env 'path' $global) $dir
-    env 'path' $global "$dir;$currpath"
+#
+# Scoop shims path and apps path from the manifest (env_add_path) are mantined
+#  in $env:$SCOOP_PATH_ENV for user scope and $env:$SCOOP_PATH_GLOBAL_ENV for the global scope.
+#
+#  - $SCOOP_PATH_ENV will will use in user PATH
+#  - $SCOOP_PATH_GLOBAL_ENV will use in system PATH
+#
 
-    # this session
-    $null, $env:PATH = strip_path $env:PATH $dir
-    $env:PATH = "$dir;$env:PATH"
+function ensure_in_path ($dir, $global) {
+    #
+    # Cleaning the PATH (old way of keeping shims & apps paths)
+    # 2023-10-10: sometime in the future this will become reduandant..
+    #
+    Remove-FromPathInEnv -Variable 'PATH' -Value $dir -Dir -Global:$global
+    #
+
+    # make sure Scoop-Path env variable (%SCOOP....%) in $env:PATH
+    if (!$SCOOP_PORTABLE) {
+        add_scoop_path_env_to_path $global
+    }
+
+    # add path to $env:$SCOOP_PATH_*
+    add_to_scoop_path $dir $global
 }
 
-function remove_from_path($dir, $global) {
-    $dir = fullpath $dir
+function remove_scoop_paths ($dir, $global) {
+    remove_scoop_path_env_from_path $global
+    remove_from_scoop_path $dir $global
+}
 
-    # future sessions
-    $was_in_path, $newpath = strip_path (env 'path' $global) $dir
-    if($was_in_path) {
-        Write-Output "Removing $(friendly_path $dir) from your path."
-        env 'path' $global $newpath
+#
+# manipulate paths API
+#
+#   - app level:
+#       add_scoop_path_env_to_path ($global)
+#       add_to_scoop_path ($dir, $global)
+#       remove_scoop_path_env_from_path ($global)
+#       remove_from_scoop_path ($dir, $global)
+#
+#   - OLD api:
+#     It is use by some manifest files !!!
+#        add_first_in_path ($dir, $global)
+#        remove_from_path ($dir, $global)
+#
+#   - low level:
+#       Get-ScoopPathEnv
+#       Add-FirstInPathToEnv
+#       Remove-FromPathInEnv
+#
+
+function add_first_in_path ($dir, $global) { add_to_scoop_path $dir $global }
+function remove_from_path ($dir, $global) { remove_from_scoop_path $dir $global }
+
+function add_scoop_path_env_to_path ($global) {
+    $scoop_path_env = Get-ScoopPathEnv $global
+    Add-FirstInPathToEnv -Variable 'PATH' -Value "%$($scoop_path_env)%" -Raw -Global:$global
+}
+
+function add_to_scoop_path ($dir, $global) {
+    $scoop_path_env = Get-ScoopPathEnv $global
+    Add-FirstInPathToEnv -Variable $scoop_path_env -Value $dir -Dir -Global:$global
+}
+
+function remove_scoop_path_env_from_path ($global) {
+    $scoop_path_env = Get-ScoopPathEnv $global
+    Remove-FromPathInEnv -Variable 'PATH' -Value "%$($scoop_path_env)%" -Raw -Global:$global
+}
+
+function remove_from_scoop_path ($dir, $global) {
+    $scoop_path_env = Get-ScoopPathEnv $global
+    Remove-FromPathInEnv -Variable $scoop_path_env -Value $dir -Dir -Global:$global
+}
+
+function Get-ScoopPathEnv ($global) { if($global) { $SCOOP_PATH_GLOBAL_ENV } else { $SCOOP_PATH_ENV } }
+
+function Add-FirstInPathToEnv {
+    param (
+        [string] $Variable,
+        [string] $Value,
+        [switch] $Dir,
+        [switch] $Raw,
+        [switch] $Global
+    )
+
+    if ($Dir) {
+        $newvalue = fullpath $Value
+    } elseif ($Raw) {
+        $newvalue = $Value
+    } else {
+        abort "Add-FirstInPathToEnv: invalid use of param"
+    }
+
+    $curr_val = Get-Env -Name $Variable -Global:$global
+
+    if ($curr_val -notmatch [regex]::escape($newvalue)) {
+        info "Adding $(friendly_path $newvalue) to $(if($global){'global'}else{'your'}) $Variable."
+
+        # future sessions
+        Write-Env -Name $Variable -Value "$newvalue;$curr_val" -Global:$global
+
     }
 
     # current session
-    $was_in_path, $newpath = strip_path $env:PATH $dir
-    if($was_in_path) { $env:PATH = $newpath }
+    if ($Dir) {
+        $env:PATH = "$newvalue;$env:PATH"
+    }
+}
+
+function Remove-FromPathInEnv {
+    param (
+        [string] $Variable,
+        [string] $Value,
+        [switch] $Dir,
+        [switch] $Raw,
+        [switch] $Global
+    )
+
+    if ($Dir) {
+        $toremove = fullpath $Value
+    } elseif ($Raw) {
+        $toremove = $Value
+    } else {
+        abort "Remove-FromPathInEnv: invalid use of param"
+    }
+
+    $curr_val = Get-Env -Name $Variable -Global:$global
+
+    # future sessions
+    $was_in_path, $newpath = strip_path $curr_val $toremove
+    if($was_in_path) {
+        info "Removing $(friendly_path $toremove) from $(if($global){'global'}else{'your'}) $Variable."
+        Write-Env -Name $Variable -Value $newpath -Global:$global
+    }
+
+    # current session
+    if ($Dir) {
+        $was_in_path, $newpath = strip_path $env:PATH $toremove
+        if($was_in_path) { $env:PATH = $newpath }
+    }
 }
 
 function ensure_robocopy_in_path {
@@ -1445,6 +1582,18 @@ $scoopdir = $env:SCOOP, (get_config ROOT_PATH), (Resolve-Path "$PSScriptRoot\..\
 
 # Scoop global apps directory
 $globaldir = $env:SCOOP_GLOBAL, (get_config GLOBAL_PATH), "$([System.Environment]::GetFolderPath('CommonApplicationData'))\scoop" | Where-Object { -not [String]::IsNullOrEmpty($_) } | Select-Object -First 1
+
+# Scoop PATHs env varaible
+$SCOOP_PATH_ENV = 'SCOOP_PATH'
+
+# Scoop Portable PATHs env varaible
+$SCOOP_PORTABLE = if ((get_config 'portable' $false) -ieq 'true') { $true } else { $false }
+if ($SCOOP_PORTABLE) {
+    $SCOOP_PATH_ENV = "SCOOP_PATH_$((friendly_path $scoopdir).replace(':', '').replace('\', '_').replace('/', '_').toupper())"
+}
+
+# Scoop Global PATHs env varaible
+$SCOOP_PATH_GLOBAL_ENV = 'SCOOP_PATH_GLOBAL'
 
 # Scoop cache directory
 # Note: Setting the SCOOP_CACHE environment variable to use a shared directory
