@@ -30,14 +30,14 @@
 # no_junction: $true|$false
 #       The 'current' version alias will not be used. Shims and shortcuts will point to specific version instead.
 #
-# scoop_repo: http://github.com/ScoopInstaller/Scoop
+# scoop_repo: https://github.com/ScoopInstaller/Scoop
 #       Git repository containining scoop source code.
 #       This configuration is useful for custom forks.
 #
 # scoop_branch: master|develop
 #       Allow to use different branch than master.
 #       Could be used for testing specific functionalities before released into all users.
-#       If you want to receive updates earlier to test new functionalities use develop (see: 'https://github.com/ScoopInstaller/Scoop/issues/2939')
+#       If you want to receive updates earlier to test new functionalities use develop (see: https://github.com/ScoopInstaller/Scoop/issues/2939)
 #
 # proxy: [username:password@]host:port
 #       By default, Scoop will use the proxy settings from Internet Options, but with anonymous authentication.
