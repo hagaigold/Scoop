@@ -4,7 +4,12 @@
 # if you've installed 'python' and 'python27', you can use 'scoop reset' to switch between
 # using one or the other.
 #
-# You can use '*' in place of <app> or `-a`/`--all` switch to reset all apps.
+# You can use '*' in place of <app> to reset all apps.
+#
+# Options:
+#   -c, --connect             Add current shim directory to PATH
+#   -d, --disconnect          Remove "active" shim directory from PATH
+#   -a, --all                 Reset all apps (alternative to '*')
 
 . "$PSScriptRoot\..\lib\getopt.ps1"
 . "$PSScriptRoot\..\lib\manifest.ps1" # 'Select-CurrentVersion' (indirectly)
@@ -12,9 +17,36 @@
 . "$PSScriptRoot\..\lib\versions.ps1" # 'Select-CurrentVersion'
 . "$PSScriptRoot\..\lib\shortcuts.ps1"
 
-$opt, $apps, $err = getopt $args 'a' 'all'
+$opt, $apps, $err = getopt $args 'acd' 'all', 'connect', 'disconnect'
 if($err) { "scoop reset: $err"; exit 1 }
 $all = $opt.a -or $opt.all
+
+if ($opt.c -or $opt.connect) {
+    $curr_path = Get-Env -Name "PATH"
+    if ($curr_path -match "(^%SCOOP_PATH.*?%);?") {
+        $spath = $($matches.1)
+        if ($spath -eq "%$($SCOOP_PATH_ENV)%") {
+            warn "$SCOOP_PATH_ENV already in PATH."
+            exit
+        } else {
+            warn "$spath in PATH"
+            warn "Do you want to remove $spath and add %$($SCOOP_PATH_ENV)% instead?"
+            $yn = Read-Host "Enter y to continue: (yN)"
+            if ($yn -notlike 'y*') { exit }
+
+            Remove-FromPathInEnv -Variable 'PATH' -Value $spath -Raw
+        }
+    }
+
+    add_scoop_path_env_to_path $false
+    exit
+}
+
+if ($opt.d -or $opt.disconnect) {
+    warn 'di-activate'
+    remove_scoop_path_env_from_path $false
+    exit
+}
 
 if(!$apps -and !$all) { error '<app> missing'; my_usage; exit 1 }
 
